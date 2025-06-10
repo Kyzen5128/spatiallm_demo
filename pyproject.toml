@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "spatiallm"
-version = "0.0.1"
+version = "0.1.0"
 description = "SpatialLM: Large Language Model for Spatial Understanding"
 authors = ["ManyCore Research Team"]
 license = "Llama3.2"
@@ -28,7 +28,7 @@ terminaltables = "^3.1.10"
 open3d = "^0.18.0"
 nvidia-cudnn-cu12 = "*"
 nvidia-nccl-cu12 = "*"
-poethepoet = {extras = ["poetry-plugin"], version = "^0.33.1"}
+poethepoet = { extras = ["poetry-plugin"], version = "^0.33.1" }
 addict = "^2.4.0"
 
 [tool.poe.tasks]
