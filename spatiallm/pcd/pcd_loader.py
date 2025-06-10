@@ -205,12 +205,12 @@ def get_points_and_colors(pcd: o3d.geometry.PointCloud):
 # Preprocess a point cloud
 def cleanup_pcd(
     pcd: o3d.geometry.PointCloud,
-    voxel_size: float = 0.02,
-    num_nb: int = 3,
-    radius: float = 0.05,
+    voxel_size: float,
+    num_nb: int = 15,
+    std_ratio: float = 2.0,
 ):
     # voxelize the point cloud
     pcd = pcd.voxel_down_sample(voxel_size)
     # remove outliers
-    pcd, _ = pcd.remove_radius_outlier(num_nb, radius)
+    pcd, _ = pcd.remove_statistical_outlier(num_nb, std_ratio=std_ratio)
     return pcd

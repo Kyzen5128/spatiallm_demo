@@ -1,13 +1,13 @@
 [tool.poetry]
 name = "spatiallm"
-version = "0.1.0"
-description = "SpatialLM: Large Language Model for Spatial Understanding"
+version = "0.1.1"
+description = "SpatialLM: Training Large Language Models for Structured Indoor Modeling"
 authors = ["ManyCore Research Team"]
 license = "Llama3.2"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = ">=3.10,<3.12"
+python = ">=3.10,<=3.12"
 torch = { version = "^2.4.1+cu124", source = "pytorch" }
 torchvision = { version = "^0.19.1+cu124", source = "pytorch" }
 torchaudio = { version = "^2.4.1+cu124", source = "pytorch" }
@@ -21,7 +21,7 @@ scikit-learn = "^1.6.1"
 toml = "^0.10.2"
 tokenizers = ">=0.19.0,<0.20.4"
 huggingface_hub = ">=0.25.0"
-rerun-sdk = ">=0.21.0"
+rerun-sdk = "^0.21.0"
 shapely = "^2.0.7"
 bbox = "^0.9.4"
 terminaltables = "^3.1.10"
@@ -33,6 +33,14 @@ addict = "^2.4.0"
 
 [tool.poe.tasks]
 install-torchsparse = "pip install git+https://github.com/mit-han-lab/torchsparse.git"
+install-flash-attn = "pip install ninja flash-attn --no-build-isolation"
+install-torch-scatter = "pip install torch-scatter -f https://data.pyg.org/whl/torch-2.4.0+cu124.html"
+install-spconv = "pip install timm spconv-cu120"
+install-sonata = [
+    "install-flash-attn",
+    "install-torch-scatter",
+    "install-spconv",
+]
 
 [build-system]
 requires = ["poetry-core", "setuptools", "wheel", "torch"]

@@ -14,13 +14,9 @@ class Layout:
             self.from_str(str)
 
     @staticmethod
-    def get_grid_size():
+    def get_grid_size(num_bins):
         world_min, world_max = NORMALIZATION_PRESET["world"]
-        return (world_max - world_min) / NORMALIZATION_PRESET["num_bins"]
-
-    @staticmethod
-    def get_num_bins():
-        return NORMALIZATION_PRESET["num_bins"]
+        return (world_max - world_min) / num_bins
 
     def from_str(self, s: str):
         s = s.lstrip("\n")
@@ -184,13 +180,13 @@ class Layout:
     def get_entities(self):
         return self.walls + self.doors + self.windows + self.bboxes
 
-    def normalize_and_discretize(self):
+    def normalize_and_discretize(self, num_bins):
         for entity in self.get_entities():
-            entity.normalize_and_discretize()
+            entity.normalize_and_discretize(num_bins)
 
-    def undiscretize_and_unnormalize(self):
+    def undiscretize_and_unnormalize(self, num_bins):
         for entity in self.get_entities():
-            entity.undiscretize_and_unnormalize()
+            entity.undiscretize_and_unnormalize(num_bins)
 
     def translate(self, translation: np.ndarray):
         for entity in self.get_entities():

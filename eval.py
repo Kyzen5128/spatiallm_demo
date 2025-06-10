@@ -12,7 +12,7 @@ import torch
 import pandas as pd
 import numpy as np
 from scipy.optimize import linear_sum_assignment
-from shapely import Polygon, LineString, polygonize, polygonize_full, make_valid
+from shapely import Polygon
 from bbox import BBox3D
 from bbox.metrics import iou_3d
 from terminaltables import AsciiTable
@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 
 ZERO_TOLERANCE = 1e-6
 LARGE_COST_VALUE = 1e6
+LAYOUTS = ["wall", "door", "window"]
 OBJECTS = [
     "curtain",
     "nightstand",
@@ -40,13 +41,11 @@ OBJECTS = [
     "side table",
     "air conditioner",
     "dresser",
-]
-THIN_OBJECTS = [
+    "stool",
+    "refrigerator",
     "painting",
     "carpet",
     "tv",
-    "door",
-    "window",
 ]
 
 
@@ -87,37 +86,8 @@ def calc_poly_iou(poly1, poly2):
     return poly_iou
 
 
-def construct_polygon(lines: List[LineString]):
-    try:
-        poly = polygonize(lines)
-        if poly.is_empty:
-            candidates = []
-            for p in polygonize_full(lines):
-                if p.is_empty:
-                    continue
-
-                candidate = p.geoms[0]
-                if isinstance(candidate, Polygon):
-                    candidates.append(candidate)
-                elif isinstance(candidate, LineString):
-                    candidates.append(Polygon(candidate))
-                else:
-                    log.warning(
-                        f"Unsupported geom_type {candidate.geom_type} to construct polygon."
-                    )
-
-            candidates.sort(key=lambda x: x.area, reverse=True)
-            poly = candidates[0]
-            if not poly.is_valid:
-                poly = make_valid(poly)
-        return poly
-    except Exception as e:
-        log.error(f"Fail to construct polygon by lines {lines}", e)
-        return Polygon()
-
-
 def read_label_mapping(
-    label_path: str, label_from="spatiallm59", label_to="spatiallm18"
+    label_path: str, label_from="spatiallm59", label_to="spatiallm23"
 ):
     assert os.path.isfile(label_path), f"Label mapping file {label_path} does not exist"
     mapping = dict()
@@ -140,6 +110,13 @@ def assign_class_map(entities: List[Bbox], class_map=Dict[str, str]):
             entity.class_name = mapping_to_class
             res_entities.append(entity)
     return res_entities
+
+
+def assign_minimum_scale(entities: List[Bbox], minimum_scale: float = 0.1):
+    for entity in entities:
+        entity.scale_x = max(entity.scale_x, minimum_scale)
+        entity.scale_y = max(entity.scale_y, minimum_scale)
+        entity.scale_z = max(entity.scale_z, minimum_scale)
 
 
 def get_entity_class(entity):
@@ -194,22 +171,32 @@ def calc_bbox_tp(
     return EvalTuple(tp, num_pred, num_gt)
 
 
+def is_valid_wall(entity: Wall):
+    wall_extent_x = max(max(entity.ax, entity.bx) - min(entity.ax, entity.bx), 0)
+    wall_extent_y = max(max(entity.ay, entity.by) - min(entity.ay, entity.by), 0)
+    return wall_extent_x > ZERO_TOLERANCE or wall_extent_y > ZERO_TOLERANCE
+
+
 def is_valid_dw(entity: Door | Window, wall_id_lookup: Dict[int, Wall]):
     attach_wall = wall_id_lookup.get(entity.id, None)
     if attach_wall is None:
         return False
-
-    wall_extent_x = max(
-        max(attach_wall.ax, attach_wall.bx) - min(attach_wall.ax, attach_wall.bx), 0
-    )
-    wall_extent_y = max(
-        max(attach_wall.ay, attach_wall.by) - min(attach_wall.ay, attach_wall.by), 0
-    )
-    return wall_extent_x > ZERO_TOLERANCE or wall_extent_y > ZERO_TOLERANCE
+    return is_valid_wall(attach_wall)
 
 
-def get_corners(entity: Door | Window | Bbox, wall_id_lookup: Dict[int, Wall]):
-    if isinstance(entity, (Door, Window)):
+def get_corners(
+    entity: Wall | Door | Window | Bbox, wall_id_lookup: Dict[int, Wall] = None
+):
+    if isinstance(entity, Wall):
+        return np.array(
+            [
+                [entity.ax, entity.ay, entity.az],
+                [entity.bx, entity.by, entity.bz],
+                [entity.bx, entity.by, entity.bz + entity.height],
+                [entity.ax, entity.ay, entity.az + entity.height],
+            ]
+        )
+    elif isinstance(entity, (Door, Window)):
         attach_wall = wall_id_lookup.get(entity.id, None)
         if attach_wall is None:
             log.error(f"{entity} attach wall is None")
@@ -305,7 +292,7 @@ def calc_thin_bbox_iou_2d(
     if are_planes_parallel_and_close(
         corners_1, corners_2, parallel_tolerance, dist_tolerance
     ):
-        p1, p2, _, p4 = corners_1
+        p1, p2, _, p4 = corners_2
         v1 = np.subtract(p2, p1)
         v2 = np.subtract(p4, p1)
         basis1 = v1 / np.linalg.norm(v1)
@@ -334,9 +321,9 @@ def calc_thin_bbox_iou_2d(
         return 0
 
 
-def calc_thin_bbox_tp(
-    pred_entities: List[Door | Window | Bbox],
-    gt_entities: List[Door | Window | Bbox],
+def calc_layout_tp(
+    pred_entities: List[Wall | Door | Window],
+    gt_entities: List[Wall | Door | Window],
     pred_wall_id_lookup: Dict[int, Wall],
     gt_wall_id_lookup: Dict[int, Wall],
     iou_threshold: float = 0.25,
@@ -400,14 +387,16 @@ if __name__ == "__main__":
         required=True,
         help="Path to the label mapping file",
     )
+    parser.add_argument("--label_from", type=str, default="spatiallm59")
+    parser.add_argument("--label_to", type=str, default="spatiallm20")
     args = parser.parse_args()
 
     df = pd.read_csv(args.metadata)
     scene_id_list = df["id"].tolist()
-    class_map = read_label_mapping(args.label_mapping)
+    class_map = read_label_mapping(args.label_mapping, args.label_from, args.label_to)
 
-    floorplan_ious = list()
-    classwise_eval_tuples: Dict[str, List[EvalTuple]] = defaultdict(list)
+    classwise_eval_tuples_25: Dict[str, List[EvalTuple]] = defaultdict(list)
+    classwise_eval_tuples_50: Dict[str, List[EvalTuple]] = defaultdict(list)
     for scene_id in scene_id_list:
         log.info(f"Evaluating scene {scene_id}")
         with open(os.path.join(args.pred_dir, f"{scene_id}.txt"), "r") as f:
@@ -416,25 +405,71 @@ if __name__ == "__main__":
             gt_layout = Layout(f.read())
         pred_layout.bboxes = assign_class_map(pred_layout.bboxes, class_map)
         gt_layout.bboxes = assign_class_map(gt_layout.bboxes, class_map)
+        assign_minimum_scale(pred_layout.bboxes, minimum_scale=0.1)
+        assign_minimum_scale(gt_layout.bboxes, minimum_scale=0.1)
 
-        # Floorplan, IoU
-        pred_poly = construct_polygon(
-            [LineString([(w.ax, w.ay), (w.bx, w.by)]) for w in pred_layout.walls]
+        # Layout, F1
+        pred_wall_id_lookup = {w.id: w for w in pred_layout.walls}
+        gt_wall_id_lookup = {w.id: w for w in gt_layout.walls}
+
+        pred_layout_instances = list(
+            filter(lambda e: is_valid_wall(e), pred_layout.walls)
+        ) + list(
+            filter(
+                lambda e: is_valid_dw(e, pred_wall_id_lookup),
+                pred_layout.doors + pred_layout.windows,
+            )
         )
-        gt_poly = construct_polygon(
-            [LineString([(w.ax, w.ay), (w.bx, w.by)]) for w in gt_layout.walls]
+        gt_layout_instances = list(
+            filter(lambda e: is_valid_wall(e), gt_layout.walls)
+        ) + list(
+            filter(
+                lambda e: is_valid_dw(e, gt_wall_id_lookup),
+                gt_layout.doors + gt_layout.windows,
+            )
         )
-        floorplan_ious.append(calc_poly_iou(pred_poly, gt_poly))
+        for class_name in LAYOUTS:
+            classwise_eval_tuples_25[class_name].append(
+                calc_layout_tp(
+                    pred_entities=[
+                        b
+                        for b in pred_layout_instances
+                        if get_entity_class(b) == class_name
+                    ],
+                    gt_entities=[
+                        b
+                        for b in gt_layout_instances
+                        if get_entity_class(b) == class_name
+                    ],
+                    pred_wall_id_lookup=pred_wall_id_lookup,
+                    gt_wall_id_lookup=gt_wall_id_lookup,
+                    iou_threshold=0.25,
+                )
+            )
+
+            classwise_eval_tuples_50[class_name].append(
+                calc_layout_tp(
+                    pred_entities=[
+                        b
+                        for b in pred_layout_instances
+                        if get_entity_class(b) == class_name
+                    ],
+                    gt_entities=[
+                        b
+                        for b in gt_layout_instances
+                        if get_entity_class(b) == class_name
+                    ],
+                    pred_wall_id_lookup=pred_wall_id_lookup,
+                    gt_wall_id_lookup=gt_wall_id_lookup,
+                    iou_threshold=0.50,
+                )
+            )
 
         # Normal Objects, F1
-        pred_normal_objects = [
-            b for b in pred_layout.bboxes if b.class_name in OBJECTS
-        ]
-        gt_normal_objects = [
-            b for b in gt_layout.bboxes if b.class_name in OBJECTS
-        ]
+        pred_normal_objects = [b for b in pred_layout.bboxes if b.class_name in OBJECTS]
+        gt_normal_objects = [b for b in gt_layout.bboxes if b.class_name in OBJECTS]
         for class_name in OBJECTS:
-            classwise_eval_tuples[class_name].append(
+            classwise_eval_tuples_25[class_name].append(
                 calc_bbox_tp(
                     pred_entities=[
                         b
@@ -446,65 +481,54 @@ if __name__ == "__main__":
                         for b in gt_normal_objects
                         if get_entity_class(b) == class_name
                     ],
+                    iou_threshold=0.25,
                 )
             )
 
-        # Thin Objects, F1
-        pred_thin_objects = [
-            b for b in pred_layout.bboxes if b.class_name in THIN_OBJECTS
-        ]
-        gt_thin_objects = [b for b in gt_layout.bboxes if b.class_name in THIN_OBJECTS]
-        pred_wall_id_lookup = {w.id: w for w in pred_layout.walls}
-        gt_wall_id_lookup = {w.id: w for w in gt_layout.walls}
-        pred_thin_objects += [
-            e
-            for e in pred_layout.doors + pred_layout.windows
-            if is_valid_dw(e, pred_wall_id_lookup)
-        ]
-        gt_thin_objects += [
-            e
-            for e in gt_layout.doors + gt_layout.windows
-            if is_valid_dw(e, gt_wall_id_lookup)
-        ]
-
-        for class_name in THIN_OBJECTS:
-            classwise_eval_tuples[class_name].append(
-                calc_thin_bbox_tp(
+            classwise_eval_tuples_50[class_name].append(
+                calc_bbox_tp(
                     pred_entities=[
                         b
-                        for b in pred_thin_objects
+                        for b in pred_normal_objects
                         if get_entity_class(b) == class_name
                     ],
                     gt_entities=[
-                        b for b in gt_thin_objects if get_entity_class(b) == class_name
+                        b
+                        for b in gt_normal_objects
+                        if get_entity_class(b) == class_name
                     ],
-                    pred_wall_id_lookup=pred_wall_id_lookup,
-                    gt_wall_id_lookup=gt_wall_id_lookup,
+                    iou_threshold=0.50,
                 )
             )
 
-    # table print
-    headers = ["Floorplan", "mean IoU"]
+    headers = ["Layouts", "F1 @.25 IoU", "F1 @.50 IoU"]
     table_data = [headers]
-    table_data += [["wall", np.mean(floorplan_ious)]]
+    for class_name in LAYOUTS:
+        tuples = classwise_eval_tuples_25[class_name]
+        f1_25 = np.ma.masked_where(
+            [t.masked for t in tuples], [t.f1 for t in tuples]
+        ).mean()
+
+        tuples = classwise_eval_tuples_50[class_name]
+        f1_50 = np.ma.masked_where(
+            [t.masked for t in tuples], [t.f1 for t in tuples]
+        ).mean()
+
+        table_data.append([class_name, f1_25, f1_50])
     print("\n" + AsciiTable(table_data).table)
 
-    headers = ["Objects", "F1 @.25 IoU"]
+    headers = ["Objects", "F1 @.25 IoU", "F1 @.50 IoU"]
     table_data = [headers]
     for class_name in OBJECTS:
-        tuples = classwise_eval_tuples[class_name]
-        f1 = np.ma.masked_where(
+        tuples = classwise_eval_tuples_25[class_name]
+        f1_25 = np.ma.masked_where(
             [t.masked for t in tuples], [t.f1 for t in tuples]
         ).mean()
-        table_data.append([class_name, f1])
-    print("\n" + AsciiTable(table_data).table)
 
-    headers = ["Thin Objects", "F1 @.25 IoU"]
-    table_data = [headers]
-    for class_name in THIN_OBJECTS:
-        tuples = classwise_eval_tuples[class_name]
-        f1 = np.ma.masked_where(
+        tuples = classwise_eval_tuples_50[class_name]
+        f1_50 = np.ma.masked_where(
             [t.masked for t in tuples], [t.f1 for t in tuples]
         ).mean()
-        table_data.append([class_name, f1])
+
+        table_data.append([class_name, f1_25, f1_50])
     print("\n" + AsciiTable(table_data).table)

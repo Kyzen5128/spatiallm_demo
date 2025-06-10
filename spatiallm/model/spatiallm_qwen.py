@@ -1,11 +1,9 @@
 # Copyright (c) Manycore Tech Inc. and affiliates.
 # All rights reserved.
 
-from enum import Enum
 from typing import List, Optional, Tuple, Union
 
 import torch
-import torchsparse
 import torch.utils.checkpoint
 import torch.nn.functional as F
 from torch import nn
@@ -15,18 +13,21 @@ from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
 )
-from torchsparse.utils.collate import sparse_collate
 from transformers.utils import logging
 from transformers.cache_utils import Cache
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
 
+try:
+    import torchsparse
+    from torchsparse.utils.collate import sparse_collate
+except ImportError:
+    pass  # Ignore the import error if torchsparse is not installed for SpatialLM1.1
+
+from spatiallm.model import PointBackboneType, ProjectorType
+
 IGNORE_INDEX = -100
 logger = logging.get_logger(__name__)
-
-
-class PointBackboneType(Enum):
-    SCENESCRIPT = "scenescript"
 
 
 class SpatialLMQwenConfig(Qwen2Config):
@@ -46,7 +47,7 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
         self.point_backbone = None
         point_config = config.point_config
         if self.point_backbone_type == PointBackboneType.SCENESCRIPT:
-            from spatiallm.model.pcd_encoder import PointCloudEncoder
+            from spatiallm.model.scenescript_encoder import PointCloudEncoder
 
             self.point_backbone = PointCloudEncoder(
                 input_channels=point_config["input_channels"],
@@ -55,10 +56,38 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
                 num_bins=point_config["num_bins"],
             )
             embed_channels = point_config["embed_channels"]
+        elif self.point_backbone_type == PointBackboneType.SONATA:
+            from spatiallm.model.sonata_encoder import Sonata
+
+            self.point_backbone = Sonata(
+                in_channels=point_config["in_channels"],
+                order=point_config["order"],
+                stride=point_config["stride"],
+                enc_depths=point_config["enc_depths"],
+                enc_channels=point_config["enc_channels"],
+                enc_num_head=point_config["enc_num_head"],
+                enc_patch_size=point_config["enc_patch_size"],
+                mlp_ratio=point_config["mlp_ratio"],
+                mask_token=point_config["mask_token"],
+                enc_mode=point_config["enc_mode"],
+                enable_fourier_encode=True,
+                num_bins=point_config["num_bins"],
+            )
+            embed_channels = point_config["enc_channels"][-1]
         else:
             raise ValueError(f"Unknown point backbone type: {self.point_backbone_type}")
 
-        self.point_proj = nn.Linear(embed_channels, config.hidden_size)
+        self.projector_type = ProjectorType(getattr(config, "projector", "linear"))
+        if self.projector_type == ProjectorType.LINEAR:
+            self.point_proj = nn.Linear(embed_channels, config.hidden_size)
+        elif self.projector_type == ProjectorType.MLP:
+            self.point_proj = nn.Sequential(
+                nn.Linear(embed_channels, embed_channels),
+                nn.GELU(),
+                nn.Linear(embed_channels, config.hidden_size),
+            )
+        else:
+            raise ValueError(f"Unknown projector type: {self.projector_type}")
 
         self.point_start_token_id = self.config.point_start_token_id
         self.point_end_token_id = self.config.point_end_token_id
@@ -81,6 +110,17 @@ class SpatialLMQwenForCausalLM(Qwen2ForCausalLM):
             pc_sparse_tensor = pc_sparse_tensor.to(device)
             encoded_features = self.point_backbone(pc_sparse_tensor)
             return self.point_proj(encoded_features["context"].to(dtype))
+        elif self.point_backbone_type == PointBackboneType.SONATA:
+            input_dict = {
+                "coord": feats[:, :3].to(device),
+                "grid_coord": coords.to(device),
+                "feat": feats.to(device),
+                "batch": torch.zeros(coords.shape[0], dtype=torch.long).to(device),
+            }
+            encoded_features = self.point_backbone(input_dict)
+            # add the batch dimension
+            encoded_features = encoded_features.unsqueeze(0)
+            return self.point_proj(encoded_features.to(dtype))
         else:
             raise ValueError(f"Unknown point backbone type: {self.point_backbone_type}")
 

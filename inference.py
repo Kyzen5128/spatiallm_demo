@@ -7,11 +7,16 @@ import numpy as np
 from tqdm import tqdm
 from threading import Thread
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from transformers import TextIteratorStreamer
+from transformers import TextIteratorStreamer, set_seed
 
 from spatiallm import Layout
-from spatiallm import SpatialLMLlamaForCausalLM, SpatialLMQwenForCausalLM
 from spatiallm.pcd import load_o3d_pcd, get_points_and_colors, cleanup_pcd, Compose
+
+DETECT_TYPE_PROMPT = {
+    "all": "Detect walls, doors, windows, boxes.",
+    "arch": "Detect walls, doors, windows.",
+    "object": "Detect boxes.",
+}
 
 
 def preprocess_point_cloud(points, colors, grid_size, num_bins):
@@ -53,24 +58,27 @@ def generate_layout(
     top_p=0.95,
     temperature=0.6,
     num_beams=1,
+    seed=-1,
     max_new_tokens=4096,
+    detect_type="all",
+    categories=[],
 ):
+    if seed >= 0:
+        set_seed(seed)
+
     # load the code template
     with open(code_template_file, "r") as f:
         code_template = f.read()
 
-    prompt = f"<|point_start|><|point_pad|><|point_end|>Detect walls, doors, windows, boxes. The reference code is as followed: {code_template}"
+    task_prompt = DETECT_TYPE_PROMPT[detect_type]
+    if detect_type != "arch" and categories:
+        task_prompt = task_prompt.replace("boxes", ", ".join(categories))
+    print("Task prompt: ", task_prompt)
+
+    prompt = f"<|point_start|><|point_pad|><|point_end|>{task_prompt} The reference code is as followed: {code_template}"
 
     # prepare the conversation data
-    if model.config.model_type == SpatialLMLlamaForCausalLM.config_class.model_type:
-        conversation = [{"role": "user", "content": prompt}]
-    elif model.config.model_type == SpatialLMQwenForCausalLM.config_class.model_type:
-        conversation = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": prompt},
-        ]
-    else:
-        raise ValueError(f"Unsupported model type: {model.config.model_type}")
+    conversation = [{"role": "user", "content": prompt}]
 
     input_ids = tokenizer.apply_chat_template(
         conversation, add_generation_prompt=True, return_tensors="pt"
@@ -104,7 +112,7 @@ def generate_layout(
 
     layout_str = "".join(generate_texts)
     layout = Layout(layout_str)
-    layout.undiscretize_and_unnormalize()
+    layout.undiscretize_and_unnormalize(num_bins=model.config.point_config["num_bins"])
     return layout
 
 
@@ -130,6 +138,82 @@ if __name__ == "__main__":
         type=str,
         default="manycore-research/SpatialLM-Llama-1B",
         help="Path to the model checkpoint",
+    )
+    parser.add_argument(
+        "-d",
+        "--detect_type",
+        type=str,
+        default="all",
+        choices=["all", "arch", "object"],
+        help="The type of indoor elements to detect. all: (wall, door, window, box), arch: (wall, door, window), object: (box)",
+    )
+    parser.add_argument(
+        "-c",
+        "--category",
+        nargs="+",
+        default=[],
+        choices=[
+            "sofa",
+            "chair",
+            "dining_chair",
+            "bar_chair",
+            "stool",
+            "bed",
+            "pillow",
+            "wardrobe",
+            "nightstand",
+            "tv_cabinet",
+            "wine_cabinet",
+            "bathroom_cabinet",
+            "shoe_cabinet",
+            "entrance_cabinet",
+            "decorative_cabinet",
+            "washing_cabinet",
+            "wall_cabinet",
+            "sideboard",
+            "cupboard",
+            "coffee_table",
+            "dining_table",
+            "side_table",
+            "dressing_table",
+            "desk",
+            "integrated_stove",
+            "gas_stove",
+            "range_hood",
+            "micro-wave_oven",
+            "sink",
+            "stove",
+            "refrigerator",
+            "hand_sink",
+            "shower",
+            "shower_room",
+            "toilet",
+            "tub",
+            "illumination",
+            "chandelier",
+            "floor-standing_lamp",
+            "wall_decoration",
+            "painting",
+            "curtain",
+            "carpet",
+            "plants",
+            "potted_bonsai",
+            "tv",
+            "computer",
+            "air_conditioner",
+            "washing_machine",
+            "clothes_rack",
+            "mirror",
+            "bookcase",
+            "cushion",
+            "bar",
+            "screen",
+            "combination_sofa",
+            "dining_table_combination",
+            "leisure_table_and_chair_combination",
+            "multifunctional_combination_bed",
+        ],
+        help="A list of categories of objects to detect. If not specified, all categories will be detected.",
     )
     parser.add_argument(
         "-t",
@@ -162,14 +246,37 @@ if __name__ == "__main__":
         default=1,
         help="The number of beams for beam search",
     )
+    parser.add_argument(
+        "--inference_dtype",
+        type=str,
+        default="bfloat16",
+        help="The torch dtype to use for inference, bfloat16 or float32",
+    )
+    parser.add_argument(
+        "--no_cleanup",
+        default=False,
+        action="store_true",
+        help="Whether to not cleanup the point cloud",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=-1,
+        help="The seed to use during inference, negative value means no seed",
+    )
     args = parser.parse_args()
 
     # load the model
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
-    model = AutoModelForCausalLM.from_pretrained(args.model_path)
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_path, torch_dtype=getattr(torch, args.inference_dtype)
+    )
     model.to("cuda")
     model.set_point_backbone_dtype(torch.float32)
     model.eval()
+
+    # number of bins used for discretization
+    num_bins = model.config.point_config["num_bins"]
 
     # check if the input is a single point cloud file or a folder containing multiple point cloud files
     if os.path.isfile(args.point_cloud):
@@ -180,13 +287,15 @@ if __name__ == "__main__":
     for point_cloud_file in tqdm(point_cloud_files):
         # load the point cloud
         point_cloud = load_o3d_pcd(point_cloud_file)
-        point_cloud = cleanup_pcd(point_cloud)
+        grid_size = Layout.get_grid_size(num_bins)
+
+        if not args.no_cleanup:
+            point_cloud = cleanup_pcd(point_cloud, voxel_size=grid_size)
+
         points, colors = get_points_and_colors(point_cloud)
         min_extent = np.min(points, axis=0)
 
         # preprocess the point cloud to tensor features
-        grid_size = Layout.get_grid_size()
-        num_bins = Layout.get_num_bins()
         input_pcd = preprocess_point_cloud(points, colors, grid_size, num_bins)
 
         # generate the layout
@@ -195,10 +304,13 @@ if __name__ == "__main__":
             input_pcd,
             tokenizer,
             args.code_template_file,
-            args.top_k,
-            args.top_p,
-            args.temperature,
-            args.num_beams,
+            top_k=args.top_k,
+            top_p=args.top_p,
+            temperature=args.temperature,
+            num_beams=args.num_beams,
+            seed=args.seed,
+            detect_type=args.detect_type,
+            categories=args.category,
         )
         layout.translate(min_extent)
         pred_language_string = layout.to_language_string()
