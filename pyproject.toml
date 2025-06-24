@@ -41,6 +41,7 @@ install-sonata = [
     "install-torch-scatter",
     "install-spconv",
 ]
+install-training = "pip install omegaconf datasets<=3.6.0 accelerate<=1.7.0 wandb"
 
 [build-system]
 requires = ["poetry-core", "setuptools", "wheel", "torch"]
