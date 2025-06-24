@@ -26,6 +26,7 @@
 
 ## ✨ News
 
+- [Jun, 2025] Added finetuning instructions in [FINETUNE.md](./FINETUNE.md).
 - [Jun, 2025] Check out our new models: [SpatialLM1.1-Llama-1B](https://huggingface.co/manycore-research/SpatialLM1.1-Llama-1B) and [SpatialLM1.1-Qwen-0.5B](https://huggingface.co/manycore-research/SpatialLM1.1-Qwen-0.5B), now available on Hugging Face. SpatialLM1.1 doubles the point cloud resolution, incorporates a more powerful point cloud encoder [Sonata](https://xywu.me/sonata/) and supports detection with user-specified categories.
 - [Jun, 2025] SpatialLM [Technical Report](https://arxiv.org/abs/2506.07491) is now on arXiv.
 - [Mar, 2025] We're excited to release the [SpatialLM-Llama-1B](https://huggingface.co/manycore-research/SpatialLM-Llama-1B) and [SpatialLM-Qwen-0.5B](https://huggingface.co/manycore-research/SpatialLM-Qwen-0.5B) on Hugging Face.
@@ -150,6 +151,10 @@ python eval.py --metadata SpatialLM-Testset/test.csv --gt_dir SpatialLM-Testset/
 ### Example using a custom video
 
 We provide an example of how to use our model to estimate scene layout starting from a RGB video with the newly released [SLAM3R](https://github.com/PKU-VCL-3DV/SLAM3R) in [EXAMPLE.md](EXAMPLE.md). These steps work for MASt3R-SLAM, and other reconstruction methods as well.
+
+### Finetune on Custom Data
+
+For instructions on fine-tuning SpatialLM on your own data, please refer to [FINETUNE.md](./FINETUNE.md). We provide an example using the [ARKitScenes](https://github.com/apple/ARKitScenes) dataset.
 
 ## SpatialLM Testset
 

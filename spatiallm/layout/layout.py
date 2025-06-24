@@ -4,14 +4,14 @@ from spatiallm.layout.entity import Wall, Door, Window, Bbox, NORMALIZATION_PRES
 
 
 class Layout:
-    def __init__(self, str: str = None):
+    def __init__(self, s: str = None):
         self.walls = []
         self.doors = []
         self.windows = []
         self.bboxes = []
 
-        if str:
-            self.from_str(str)
+        if s:
+            self.from_str(s)
 
     @staticmethod
     def get_grid_size(num_bins):
@@ -205,3 +205,76 @@ class Layout:
         for entity in self.get_entities():
             entity_strings.append(entity.to_language_string())
         return "\n".join(entity_strings)
+
+    def filter_empty_bboxes(self, points, num_points=100, margin=0.15):
+        filtered_bboxes = []
+        for bbox in self.bboxes:
+            box_center = np.array([bbox.position_x, bbox.position_y, bbox.position_z])
+            box_size = np.array([bbox.scale_x, bbox.scale_y, bbox.scale_z])
+            rot_mat = R.from_rotvec(np.array([0, 0, bbox.angle_z])).as_matrix()
+
+            translated_points = points - np.array(box_center)
+            rotated_points = translated_points @ rot_mat.T
+            box_min = -box_size / 2 - margin
+            box_max = box_size / 2 + margin
+            points_mask = np.all(rotated_points >= box_min, axis=1) & np.all(
+                rotated_points <= box_max, axis=1
+            )
+            if np.sum(points_mask) > num_points:
+                filtered_bboxes.append(bbox)
+
+        self.bboxes = filtered_bboxes
+        return filtered_bboxes
+
+    @staticmethod
+    def sort_entities(entities, wall_lookup=None):
+        if not entities:
+            return []
+        sort_keys = [entity.sort_key() for entity in entities]
+        sorted_idx = np.lexsort(np.stack(sort_keys).T)
+        sorted_entities = [entities[i] for i in sorted_idx]
+        for i, entity in enumerate(sorted_entities):
+            entity.id = i
+            if wall_lookup is not None and hasattr(entity, "wall_id"):
+                entity.wall_id = wall_lookup[entity.wall_id]
+        return sorted_entities
+
+    def reorder_entities(
+        self,
+        filter_small_objects=True,
+        filter_unknown=True,
+        size_threshold=0.15,
+    ):
+        bboxes = []
+        # filter invalid bboxes
+        for bbox in self.bboxes:
+            if filter_small_objects and (
+                bbox.scale_x < size_threshold
+                and bbox.scale_y < size_threshold
+                and bbox.scale_z < size_threshold
+            ):
+                continue
+            if filter_unknown and (not bbox.class_name or bbox.class_name == "unknown"):
+                continue
+            bboxes.append(bbox)
+
+        wall_lookup = {}
+        sorted_walls = []
+        if len(self.walls) > 0:
+            sort_keys = []
+            for wi, wall in enumerate(self.walls):
+                sort_keys.append(wall.sort_key())
+            sorted_idx = np.lexsort(np.stack(sort_keys).T)
+            sorted_walls = [self.walls[i] for i in sorted_idx]
+            for wi, wall in enumerate(sorted_walls):
+                wall_lookup[wall.id] = wi
+                wall.id = wi
+
+        sorted_doors = self.sort_entities(self.doors, wall_lookup)
+        sorted_windows = self.sort_entities(self.windows, wall_lookup)
+        sorted_bboxes = self.sort_entities(bboxes)
+
+        self.walls = sorted_walls
+        self.doors = sorted_doors
+        self.windows = sorted_windows
+        self.bboxes = sorted_bboxes
