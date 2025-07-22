@@ -48,7 +48,7 @@ def main():
         ).format(
             standalone="--standalone" if standalone else "",
             nnodes=os.getenv("NNODES", "1"),
-            node_rank=os.getenv("RANK", "0"),
+            node_rank=os.getenv("NODE_RANK", "0"),
             nproc_per_node=os.getenv("NPROC_PER_NODE", str(get_device_count())),
             master_addr=master_addr,
             master_port=master_port,
