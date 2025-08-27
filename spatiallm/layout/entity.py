@@ -74,6 +74,8 @@ class Wall:
         self.ay *= scaling
         self.az *= scaling
         self.bx *= scaling
+        self.by *= scaling
+        self.bz *= scaling
 
     def normalize_and_discretize(self, num_bins):
         height_min, height_max = NORMALIZATION_PRESET["height"]
