@@ -78,7 +78,13 @@ def generate_layout(
     prompt = f"<|point_start|><|point_pad|><|point_end|>{task_prompt} The reference code is as followed: {code_template}"
 
     # prepare the conversation data
-    conversation = [{"role": "user", "content": prompt}]
+    if model.config.model_type == "spatiallm_qwen":
+        conversation = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": prompt},
+        ]
+    else:
+        conversation = [{"role": "user", "content": prompt}]
 
     input_ids = tokenizer.apply_chat_template(
         conversation, add_generation_prompt=True, return_tensors="pt"
