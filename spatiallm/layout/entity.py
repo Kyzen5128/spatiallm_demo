@@ -74,6 +74,8 @@ class Wall:
         self.ay *= scaling
         self.az *= scaling
         self.bx *= scaling
+        self.by *= scaling
+        self.bz *= scaling
 
     def normalize_and_discretize(self, num_bins):
         height_min, height_max = NORMALIZATION_PRESET["height"]
@@ -90,14 +92,14 @@ class Wall:
         self.by = (self.by - world_min) / (world_max - world_min) * num_bins
         self.bz = (self.bz - world_min) / (world_max - world_min) * num_bins
 
-        self.height = np.clip(self.height, 0, num_bins - 1)
-        self.thickness = np.clip(self.thickness, 0, num_bins - 1)
-        self.ax = np.clip(self.ax, 0, num_bins - 1)
-        self.ay = np.clip(self.ay, 0, num_bins - 1)
-        self.az = np.clip(self.az, 0, num_bins - 1)
-        self.bx = np.clip(self.bx, 0, num_bins - 1)
-        self.by = np.clip(self.by, 0, num_bins - 1)
-        self.bz = np.clip(self.bz, 0, num_bins - 1)
+        self.height = np.clip(int(self.height), 0, num_bins - 1)
+        self.thickness = np.clip(int(self.thickness), 0, num_bins - 1)
+        self.ax = np.clip(int(self.ax), 0, num_bins - 1)
+        self.ay = np.clip(int(self.ay), 0, num_bins - 1)
+        self.az = np.clip(int(self.az), 0, num_bins - 1)
+        self.bx = np.clip(int(self.bx), 0, num_bins - 1)
+        self.by = np.clip(int(self.by), 0, num_bins - 1)
+        self.bz = np.clip(int(self.bz), 0, num_bins - 1)
 
     def undiscretize_and_unnormalize(self, num_bins):
         height_min, height_max = NORMALIZATION_PRESET["height"]
@@ -128,6 +130,21 @@ class Wall:
         # wall_0=Wall(a_x,a_y,a_z,b_x,b_y,b_z,height,thickness)
         language_string = f"{self.entity_label}_{self.id}={capitalized_label}({self.ax},{self.ay},{self.az},{self.bx},{self.by},{self.bz},{self.height},{self.thickness})"
         return language_string
+
+    def sort_key(self):
+        # Lex-sort corners
+        wall_start = np.array([self.ax, self.ay, self.az])
+        wall_end = np.array([self.bx, self.by, self.bz])
+        corners = np.stack([wall_start, wall_end])  # [2, 3]
+
+        idx = np.lexsort(corners.T)  # [2]. Sorts by z, y, x.
+        corner_1_ordered, corner_2_ordered = corners[idx]
+
+        # Sort wall-corners
+        self.ax, self.ay, self.az = corner_1_ordered
+        self.bx, self.by, self.bz = corner_2_ordered
+
+        return np.concatenate([corner_2_ordered, corner_1_ordered])
 
 
 @dataclass
@@ -188,11 +205,11 @@ class Door:
             (self.position_z - world_min) / (world_max - world_min) * num_bins
         )
 
-        self.width = np.clip(self.width, 0, num_bins - 1)
-        self.height = np.clip(self.height, 0, num_bins - 1)
-        self.position_x = np.clip(self.position_x, 0, num_bins - 1)
-        self.position_y = np.clip(self.position_y, 0, num_bins - 1)
-        self.position_z = np.clip(self.position_z, 0, num_bins - 1)
+        self.width = np.clip(int(self.width), 0, num_bins - 1)
+        self.height = np.clip(int(self.height), 0, num_bins - 1)
+        self.position_x = np.clip(int(self.position_x), 0, num_bins - 1)
+        self.position_y = np.clip(int(self.position_y), 0, num_bins - 1)
+        self.position_z = np.clip(int(self.position_z), 0, num_bins - 1)
 
     def undiscretize_and_unnormalize(self, num_bins):
         width_min, width_max = NORMALIZATION_PRESET["width"]
@@ -219,6 +236,9 @@ class Door:
         # door_0=Door(wall_id,position_x,position_y,position_z,width,height)
         language_string = f"{self.entity_label}_{self.id}={capitalized_label}(wall_{self.wall_id},{self.position_x},{self.position_y},{self.position_z},{self.width},{self.height})"
         return language_string
+
+    def sort_key(self):
+        return np.array([self.position_x, self.position_y])
 
 
 @dataclass
@@ -302,13 +322,13 @@ class Bbox:
         self.scale_y = (self.scale_y - scale_min) / (scale_max - scale_min) * num_bins
         self.scale_z = (self.scale_z - scale_min) / (scale_max - scale_min) * num_bins
 
-        self.position_x = np.clip(self.position_x, 0, num_bins - 1)
-        self.position_y = np.clip(self.position_y, 0, num_bins - 1)
-        self.position_z = np.clip(self.position_z, 0, num_bins - 1)
-        self.angle_z = np.clip(self.angle_z, 0, num_bins - 1)
-        self.scale_x = np.clip(self.scale_x, 0, num_bins - 1)
-        self.scale_y = np.clip(self.scale_y, 0, num_bins - 1)
-        self.scale_z = np.clip(self.scale_z, 0, num_bins - 1)
+        self.position_x = np.clip(int(self.position_x), 0, num_bins - 1)
+        self.position_y = np.clip(int(self.position_y), 0, num_bins - 1)
+        self.position_z = np.clip(int(self.position_z), 0, num_bins - 1)
+        self.angle_z = np.clip(int(self.angle_z), 0, num_bins - 1)
+        self.scale_x = np.clip(int(self.scale_x), 0, num_bins - 1)
+        self.scale_y = np.clip(int(self.scale_y), 0, num_bins - 1)
+        self.scale_z = np.clip(int(self.scale_z), 0, num_bins - 1)
 
     def undiscretize_and_unnormalize(self, num_bins):
         world_min, world_max = NORMALIZATION_PRESET["world"]
@@ -337,3 +357,6 @@ class Bbox:
         # bbox_0=Bbox(class_name,position_x,position_y,position_z,angle_z,scale_x,scale_y,scale_z)
         language_string = f"{self.entity_label}_{self.id}={capitalized_label}({self.class_name},{self.position_x},{self.position_y},{self.position_z},{self.angle_z},{self.scale_x},{self.scale_y},{self.scale_z})"
         return language_string
+
+    def sort_key(self):
+        return np.array([self.position_x, self.position_y])

@@ -178,7 +178,7 @@ def is_valid_wall(entity: Wall):
 
 
 def is_valid_dw(entity: Door | Window, wall_id_lookup: Dict[int, Wall]):
-    attach_wall = wall_id_lookup.get(entity.id, None)
+    attach_wall = wall_id_lookup.get(entity.wall_id, None)
     if attach_wall is None:
         return False
     return is_valid_wall(attach_wall)
@@ -197,7 +197,7 @@ def get_corners(
             ]
         )
     elif isinstance(entity, (Door, Window)):
-        attach_wall = wall_id_lookup.get(entity.id, None)
+        attach_wall = wall_id_lookup.get(entity.wall_id, None)
         if attach_wall is None:
             log.error(f"{entity} attach wall is None")
             return
