@@ -169,3 +169,12 @@ cython_debug/
 
 # Ignore custom result outputs
 result/
+
+# Model weights & large binary files (use HuggingFace Hub instead)
+models/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.h5
