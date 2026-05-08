@@ -26,7 +26,7 @@
 cd /home/kyzen/SpatialLM
 conda activate spatiallm
 
-bash pipeline/run_pipeline.sh <輸入點雲.ply> <輸出目錄> [--flip]
+bash pipeline/run_pipeline.sh <輸入點雲.ply> <輸出目錄>
 ```
 
 **實際範例：**
@@ -34,8 +34,7 @@ bash pipeline/run_pipeline.sh <輸入點雲.ply> <輸出目錄> [--flip]
 ```bash
 bash pipeline/run_pipeline.sh \
     /home/kyzen/SLAM3R/results/Replica_demo/Replica_demo_room0_recon.ply \
-    result/Replica_demo/improved \
-    --flip
+    result/Replica_demo/improved
 ```
 
 完成後用 Rerun 查看結果：
@@ -77,21 +76,21 @@ conda activate spatiallm
 python pipeline/preprocess_aligned.py \
     --input /home/kyzen/SLAM3R/results/Replica_demo/Replica_demo_room0_recon.ply \
     --output result/Replica_demo/improved/aligned_pointcloud.ply \
-    --target_height 2.5 \
-    --flip
+    --target_height 2.5
 ```
 
-**前處理做了什麼（7 步驟）：**
+**前處理做了什麼（v3，6 步驟）：**
 
 | 步驟 | 說明 | 方法 |
 |------|------|------|
 | 1 | 載入點雲 | `open3d.io.read_point_cloud` |
-| 2 | 找地板平面 | RANSAC (`segment_plane`) |
+| 2 | 找最大水平面 | RANSAC（相對 threshold：Z range 的 0.5%）|
 | 3 | 對齊地板到水平 | Rodrigues 旋轉公式 |
-| 4 | 去噪 | Statistical Outlier Removal |
-| 5 | 縮放到 2.5m 高度 | `scale = 2.5 / 當前高度` |
-| 6 | 對齊牆面到座標軸 | OpenCV `minAreaRect` |
-| 7 | 位置調整 | 地板移到 z=0，中心移到原點 |
+| 4 | 縮放到 2.5m 高度 | `scale = 2.5 / 當前高度` |
+| **5** | **自動偵測地板方向** | **家具複雜度評分（相對閾值，scale 無關）** |
+| 6 | 牆面對齊 + 位置調整 | OpenCV `minAreaRect` + z=0 + 中心原點 |
+
+> 不含去噪步驟 — SpatialLM `inference.py` 已內建 `cleanup_pcd`。
 
 **參數說明：**
 
@@ -100,10 +99,11 @@ python pipeline/preprocess_aligned.py \
 | `--input` | 輸入點雲 (.ply) | 必填 |
 | `--output` | 輸出點雲 (.ply) | 必填 |
 | `--target_height` | 目標房間高度（公尺） | `2.5` |
-| `--flip` | 上下翻轉 180°（SLAM3R 常需要） | 關閉 |
+| `--flip` | **緊急手動覆蓋**：強制翻轉，跳過自動偵測 | 關閉（自動偵測）|
 
-> **什麼時候要加 `--flip`？**
-> 如果 SLAM3R 產出的點雲是上下顛倒的就要加。可以先不加跑一次，如果推論結果很差再加 `--flip` 重跑。
+> **地板方向是自動偵測的（v3 使用相對閾值）。**
+> 腳本比較「翻轉 / 不翻轉」兩個方向的「家具複雜度分數」（高度 2%~50% 帶的點數 × Z 標準差），選高分方向。因為使用相對閾值，scale 前後都能正確判斷。天花板沒有家具，永遠不會贏。
+> 只有當自動偵測明顯判斷錯誤時，才需要加 `--flip` 強制覆蓋。
 
 ### 第 2 步：SpatialLM 推論
 
@@ -140,7 +140,7 @@ rerun result/Replica_demo/improved/result.rrd --web-viewer
 ```
 SpatialLM/
 ├── pipeline/                        # 前處理工具
-│   ├── preprocess_aligned.py        #   7 步驟點雲對齊腳本
+│   ├── preprocess_aligned.py        #   v3 點雲對齊腳本（6 步驟）
 │   ├── run_pipeline.sh              #   一鍵執行完整流程
 │   └── README.md                    #   技術細節說明
 ├── inference.py                     # SpatialLM 推論
@@ -162,9 +162,10 @@ SpatialLM/
 
 ### 推論結果很差（物件偵測不到或框歪了）
 
-1. 先確認是否加了 `--flip`（或移除 `--flip`），重跑前處理
-2. 檢查前處理輸出的最終尺寸，高度應為 `2.500m`
-3. SpatialLM 對「中國式公寓」場景辨識最佳，非典型房間可能效果較差（模型先天偏見）
+1. 查看前處理的診斷輸出，確認「不翻轉」vs「翻轉後」兩個分數是否合理
+2. 如果懷疑自動偵測判斷錯誤，加 `--flip` 強制翻轉後重跑
+3. 檢查前處理輸出的最終尺寸，高度應為 `2.500m`
+4. SpatialLM 對「中國式公寓」場景辨識最佳，非典型房間可能效果較差（模型先天偏見）
 
 ### 推論跑很久 / GPU 沒在動
 
